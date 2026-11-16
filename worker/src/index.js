@@ -162,23 +162,45 @@ async function passThrough(res) {
   });
 }
 
+// ocid는 API 키 조각을 품을 수 있어 페이지로 내보내지 않는다.
+// 대신 ocid의 SHA-256 앞 32자(ref)를 주고, ref → ocid 대응은 세션에 둔다.
+async function characterRef(ocid) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ocid));
+  return [...new Uint8Array(digest)].slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function characters(request, env) {
   const accessToken = await accessTokenFor(request, env);
   if (!accessToken) return LOGIN_EXPIRED();
   const res = await fetch(`${API}/character/list`, {
     headers: { authorization: `Bearer ${accessToken}` }
   });
-  return passThrough(res);
+  if (!res.ok) return passThrough(res);
+
+  const data = await res.json();
+  const refToOcid = {};
+  for (const account of data.account_list || []) {
+    for (const character of account.character_list || []) {
+      const ref = await characterRef(character.ocid);
+      refToOcid[ref] = character.ocid;
+      character.ref = ref;
+      delete character.ocid;
+    }
+  }
+  await env.SESSIONS.put(`${sessionIdFrom(request)}:characters`, JSON.stringify(refToOcid), { expirationTtl: SESSION_TTL });
+  return json(data);
 }
 
 // character/basic은 로그인 토큰으로 열리지 않아 서비스 API 키로 부른다.
-// 로그인한 사용자만 쓸 수 있게 막아 둔다.
+// 로그인한 사용자만, 자기 캐릭터 목록에 있는 캐릭터만 조회할 수 있다.
 async function basic(request, url, env) {
   const accessToken = await accessTokenFor(request, env);
   if (!accessToken) return LOGIN_EXPIRED();
-  const ocid = url.searchParams.get("ocid");
-  if (!ocid || !/^[0-9a-f]{32}$/.test(ocid)) return json({ error: "캐릭터 정보가 올바르지 않아요." }, 400);
-  const res = await fetch(`${API}/character/basic?ocid=${ocid}`, {
+  const ref = url.searchParams.get("ref") || "";
+  const refToOcid = JSON.parse((await env.SESSIONS.get(`${sessionIdFrom(request)}:characters`)) || "{}");
+  const ocid = refToOcid[ref];
+  if (!ocid) return json({ error: "캐릭터 목록을 다시 불러와 주세요." }, 400);
+  const res = await fetch(`${API}/character/basic?ocid=${encodeURIComponent(ocid)}`, {
     headers: { "x-nxopen-api-key": env.NEXON_API_KEY }
   });
   return passThrough(res);
@@ -186,6 +208,9 @@ async function basic(request, url, env) {
 
 async function logout(request, env) {
   const sessionId = sessionIdFrom(request);
-  if (sessionId) await env.SESSIONS.delete(sessionId);
+  if (sessionId) {
+    await env.SESSIONS.delete(sessionId);
+    await env.SESSIONS.delete(`${sessionId}:characters`);
+  }
   return json({ ok: true });
 }

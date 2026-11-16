@@ -112,7 +112,7 @@
 
   <section id="result"></section>
 
-  <p class="foot">재미로만 봐 주세요. 실제 게임 확률과는 무관해요.</p>
+  <p class="foot">재미로만 봐 주세요. 실제 게임 확률과는 무관해요.<br>Data based on NEXON Open API</p>
 </main>
 
 <script>
@@ -121,7 +121,7 @@ const API = "https://open.api.nexon.com/maplestory/v1";
 const WORKER_URL = "https://maple-fortune.choegohm.workers.dev";
 const KEY_STORAGE = "maple-fortune:apiKey";
 const SESSION_STORAGE = "maple-fortune:session";
-const LAST_CHAR_STORAGE = "maple-fortune:lastOcid";
+const LAST_CHAR_STORAGE = "maple-fortune:lastCharacter";
 
 const LOGIN_ERRORS = {
   cancelled: "넥슨 로그인이 취소됐어요.",
@@ -198,19 +198,32 @@ async function workerGet(path, session) {
   return data;
 }
 
-// 로그인했으면 Worker를, 아니면 API 키로 넥슨 API를 직접 부른다
+// ocid의 SHA-256 앞 32자. Worker가 주는 ref와 같은 값이라 두 방식의 운세가 같다.
+async function characterRef(ocid) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ocid));
+  return [...new Uint8Array(digest)].slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// 로그인했으면 Worker를, 아니면 API 키로 넥슨 API를 직접 부른다.
+// 로그인 방식에서는 ocid 대신 ref만 받는다.
 function currentSource() {
   const session = storageGet(SESSION_STORAGE);
   if (session) {
     return {
       list: () => workerGet("/characters", session),
-      basic: (ocid) => workerGet(`/basic?ocid=${encodeURIComponent(ocid)}`, session)
+      basic: (c) => workerGet(`/basic?ref=${encodeURIComponent(c.ref)}`, session)
     };
   }
   const key = storageGet(KEY_STORAGE) || $("apiKey").value.trim();
   return {
-    list: () => nexonGet("/character/list", key),
-    basic: (ocid) => nexonGet(`/character/basic?ocid=${encodeURIComponent(ocid)}`, key)
+    list: async () => {
+      const data = await nexonGet("/character/list", key);
+      for (const account of data.account_list || []) {
+        for (const c of account.character_list || []) c.ref = await characterRef(c.ocid);
+      }
+      return data;
+    },
+    basic: (c) => nexonGet(`/character/basic?ocid=${encodeURIComponent(c.ocid)}`, key)
   };
 }
 
@@ -268,7 +281,7 @@ function grade(score) {
   return { label: "나쁨", color: "var(--bad)" };
 }
 
-function computeFortune(basic, ocid, today) {
+function computeFortune(basic, ref, today) {
   const birthYmd = basic.character_date_create.slice(0, 10);
   const birthIdx = dayPillarIndex(birthYmd);
   const todayIdx = dayPillarIndex(today);
@@ -277,7 +290,7 @@ function computeFortune(basic, ocid, today) {
   const towns = TOWNS.filter(([, minLevel]) => basic.character_level >= minLevel);
 
   const items = ITEMS.map((item) => {
-    const seed = `${ocid}|${today}|${item.key}`;
+    const seed = `${ref}|${today}|${item.key}`;
     const base = 30 + Math.floor(hashUnit(seed + "|score") * 61);
     const score = Math.max(5, Math.min(100, base + affinity.score));
     const channel = maxChannel ? Math.floor(hashUnit(seed + "|channel") * maxChannel) + 1 : null;
@@ -355,12 +368,12 @@ function renderCharacterList() {
     const group = el("optgroup", { label: world });
     list.sort((x, y) => y.character_level - x.character_level);
     for (const c of list) {
-      group.append(el("option", { value: c.ocid, text: `${c.character_name} · Lv.${c.character_level} ${c.character_class}` }));
+      group.append(el("option", { value: c.ref, text: `${c.character_name} · Lv.${c.character_level} ${c.character_class}` }));
     }
     select.append(group);
   }
   const last = storageGet(LAST_CHAR_STORAGE);
-  if (last && characters.some((c) => c.ocid === last)) select.value = last;
+  if (last && characters.some((c) => c.ref === last)) select.value = last;
   $("charCount").textContent = `캐릭터 ${characters.length}개`;
 }
 
@@ -387,16 +400,16 @@ async function loadCharacters() {
 }
 
 async function runFortune() {
-  const ocid = $("charSelect").value;
-  if (!ocid) return;
+  const character = characters.find((c) => c.ref === $("charSelect").value);
+  if (!character) return;
   showError("");
   $("runBtn").disabled = true;
   $("runBtn").textContent = "보는 중…";
   try {
-    const basic = await currentSource().basic(ocid);
+    const basic = await currentSource().basic(character);
     const today = kstToday();
-    storageSet(LAST_CHAR_STORAGE, ocid);
-    renderResult(basic, computeFortune(basic, ocid, today), today);
+    storageSet(LAST_CHAR_STORAGE, character.ref);
+    renderResult(basic, computeFortune(basic, character.ref, today), today);
   } catch (e) {
     showError(e.message);
   } finally {
