@@ -1,0 +1,13 @@
+name = "maple-fortune"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+
+[vars]
+PAGE_URL = "https://choegohm.github.io/maple-fortune/"
+ALLOWED_ORIGIN = "https://choegohm.github.io"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "3e20c4fea44a4a45b969041cc0cb6c2a"
+
+# NEXON_CLIENT_ID, NEXON_CLIENT_SECRET, NEXON_API_KEY는 `wrangler secret put`으로 넣는다

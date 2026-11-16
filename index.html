@@ -50,6 +50,8 @@
   button.ghost { background: transparent; color: var(--muted); border-color: var(--line); font-weight: 500; }
   button:disabled { opacity: .6; cursor: default; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #nexonLogin { width: 100%; }
+  .divider { margin: 0; text-align: center; color: var(--muted); font-size: 12px; }
   .hint { margin: 0; color: var(--muted); font-size: 12px; }
   .hint a { color: var(--accent); }
   .error { margin: 0; color: var(--bad); font-size: 13px; }
@@ -86,6 +88,8 @@
   </header>
 
   <section class="panel" id="keyPanel">
+    <button id="nexonLogin">넥슨 ID로 로그인</button>
+    <p class="divider">또는 API 키로 불러오기</p>
     <div class="row">
       <input id="apiKey" type="password" placeholder="넥슨 OpenAPI 키" autocomplete="off">
       <button id="keySave">불러오기</button>
@@ -96,7 +100,7 @@
   <section class="panel" id="charPanel" hidden>
     <div class="keyline">
       <span id="charCount"></span>
-      <button class="ghost" id="keyReset">키 변경</button>
+      <button class="ghost" id="keyReset">로그아웃</button>
     </div>
     <div class="row">
       <select id="charSelect"></select>
@@ -113,8 +117,17 @@
 
 <script>
 const API = "https://open.api.nexon.com/maplestory/v1";
+// 넥슨 로그인을 처리하는 Cloudflare Worker 주소
+const WORKER_URL = "https://maple-fortune.choegohm.workers.dev";
 const KEY_STORAGE = "maple-fortune:apiKey";
+const SESSION_STORAGE = "maple-fortune:session";
 const LAST_CHAR_STORAGE = "maple-fortune:lastOcid";
+
+const LOGIN_ERRORS = {
+  cancelled: "넥슨 로그인이 취소됐어요.",
+  state: "로그인 요청이 올바르지 않아요. 다시 시도해 주세요.",
+  token: "넥슨 로그인에 실패했어요. 잠시 후 다시 시도해 주세요."
+};
 
 // 확인된 월드별 채널 수 (20세 이상 채널 포함)
 const WORLD_CHANNELS = {
@@ -172,6 +185,33 @@ async function nexonGet(path, key) {
     throw new Error(data?.error?.message || `넥슨 API 오류 (HTTP ${res.status})`);
   }
   return data;
+}
+
+async function workerGet(path, session) {
+  const res = await fetch(WORKER_URL + path, { headers: { authorization: `Bearer ${session}` } });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    storageSet(SESSION_STORAGE, null);
+    throw new Error(data.error || "로그인이 만료됐어요. 다시 로그인해 주세요.");
+  }
+  if (!res.ok) throw new Error(data?.error?.message || data?.error || `서버 오류 (HTTP ${res.status})`);
+  return data;
+}
+
+// 로그인했으면 Worker를, 아니면 API 키로 넥슨 API를 직접 부른다
+function currentSource() {
+  const session = storageGet(SESSION_STORAGE);
+  if (session) {
+    return {
+      list: () => workerGet("/characters", session),
+      basic: (ocid) => workerGet(`/basic?ocid=${encodeURIComponent(ocid)}`, session)
+    };
+  }
+  const key = storageGet(KEY_STORAGE) || $("apiKey").value.trim();
+  return {
+    list: () => nexonGet("/character/list", key),
+    basic: (ocid) => nexonGet(`/character/basic?ocid=${encodeURIComponent(ocid)}`, key)
+  };
 }
 
 // 한국 시간 기준 오늘 날짜 (YYYY-MM-DD)
@@ -324,20 +364,20 @@ function renderCharacterList() {
   $("charCount").textContent = `캐릭터 ${characters.length}개`;
 }
 
-async function loadCharacters(key) {
+async function loadCharacters() {
   showError("");
   $("keySave").disabled = true;
   $("keySave").textContent = "불러오는 중…";
   try {
-    const data = await nexonGet("/character/list", key);
+    const data = await currentSource().list();
     characters = (data.account_list || []).flatMap((acc) => acc.character_list || []);
     if (!characters.length) throw new Error("이 계정에 캐릭터가 없어요.");
-    storageSet(KEY_STORAGE, key);
     renderCharacterList();
     $("keyPanel").hidden = true;
     $("charPanel").hidden = false;
   } catch (e) {
     showError(e.message);
+    storageSet(KEY_STORAGE, null);
     $("keyPanel").hidden = false;
     $("charPanel").hidden = true;
   } finally {
@@ -347,14 +387,13 @@ async function loadCharacters(key) {
 }
 
 async function runFortune() {
-  const key = storageGet(KEY_STORAGE) || $("apiKey").value.trim();
   const ocid = $("charSelect").value;
   if (!ocid) return;
   showError("");
   $("runBtn").disabled = true;
   $("runBtn").textContent = "보는 중…";
   try {
-    const basic = await nexonGet(`/character/basic?ocid=${encodeURIComponent(ocid)}`, key);
+    const basic = await currentSource().basic(ocid);
     const today = kstToday();
     storageSet(LAST_CHAR_STORAGE, ocid);
     renderResult(basic, computeFortune(basic, ocid, today), today);
@@ -366,14 +405,23 @@ async function runFortune() {
   }
 }
 
+$("nexonLogin").addEventListener("click", () => {
+  location.href = WORKER_URL + "/login";
+});
 $("keySave").addEventListener("click", () => {
   const key = $("apiKey").value.trim();
   if (!key) return showError("API 키를 입력해 주세요.");
-  loadCharacters(key);
+  storageSet(KEY_STORAGE, key);
+  loadCharacters();
 });
 $("apiKey").addEventListener("keydown", (e) => { if (e.key === "Enter") $("keySave").click(); });
 $("runBtn").addEventListener("click", runFortune);
 $("keyReset").addEventListener("click", () => {
+  const session = storageGet(SESSION_STORAGE);
+  if (session) {
+    fetch(WORKER_URL + "/logout", { method: "POST", headers: { authorization: `Bearer ${session}` } }).catch(() => {});
+  }
+  storageSet(SESSION_STORAGE, null);
   storageSet(KEY_STORAGE, null);
   characters = [];
   $("apiKey").value = "";
@@ -383,8 +431,19 @@ $("keyReset").addEventListener("click", () => {
   $("apiKey").focus();
 });
 
-const savedKey = storageGet(KEY_STORAGE);
-if (savedKey) loadCharacters(savedKey);
+// 넥슨 로그인 후 Worker가 #session=... 또는 #login_error=... 로 돌려보낸다
+const returned = new URLSearchParams(location.hash.slice(1));
+if (returned.has("session") || returned.has("login_error")) {
+  history.replaceState(null, "", location.pathname + location.search);
+  if (returned.has("session")) {
+    storageSet(SESSION_STORAGE, returned.get("session"));
+    storageSet(KEY_STORAGE, null);
+  } else {
+    showError(LOGIN_ERRORS[returned.get("login_error")] || LOGIN_ERRORS.token);
+  }
+}
+
+if (storageGet(SESSION_STORAGE) || storageGet(KEY_STORAGE)) loadCharacters();
 </script>
 </body>
 </html>
