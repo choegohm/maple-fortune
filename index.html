@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>메이플 오늘의 운세</title>
+<style>
+  :root {
+    --bg: #f3f5f8;
+    --surface: #ffffff;
+    --fg: #1d2330;
+    --muted: #6b7385;
+    --line: #e3e7ee;
+    --accent: #e8792b;
+    --good: #2f9e6b;
+    --mid: #c79a1c;
+    --bad: #d2493f;
+    --bar: #edf0f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171d;
+      --surface: #1d2129;
+      --fg: #e7eaf0;
+      --muted: #949cad;
+      --line: #2c323d;
+      --accent: #f08a3e;
+      --good: #4cc08a;
+      --mid: #e0b43a;
+      --bad: #ef6a5f;
+      --bar: #2a2f39;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.5 Pretendard, system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  }
+  main { max-width: 560px; margin: 0 auto; padding: 32px 16px 48px; display: flex; flex-direction: column; gap: 16px; }
+  h1 { margin: 0; font-size: 22px; }
+  .sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .row { display: flex; gap: 8px; }
+  input, select, button { font: inherit; color: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); padding: 10px 12px; min-width: 0; }
+  input, select { flex: 1; }
+  button { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  button.ghost { background: transparent; color: var(--muted); border-color: var(--line); font-weight: 500; }
+  button:disabled { opacity: .6; cursor: default; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .hint { margin: 0; color: var(--muted); font-size: 12px; }
+  .hint a { color: var(--accent); }
+  .error { margin: 0; color: var(--bad); font-size: 13px; }
+  .keyline { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .head { display: flex; gap: 14px; align-items: center; padding: 16px; border-bottom: 1px solid var(--line); }
+  .head img { width: 72px; height: 72px; object-fit: contain; image-rendering: pixelated; flex: none; }
+  .who { flex: 1; min-width: 0; }
+  .who b { font-size: 17px; }
+  .who div { color: var(--muted); font-size: 13px; }
+  .total { text-align: right; flex: none; }
+  .total .num { font-size: 36px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  .total .grade { font-size: 13px; font-weight: 700; }
+  .day { padding: 10px 16px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .items { list-style: none; margin: 0; padding: 0; }
+  .items li { padding: 12px 16px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; align-items: center; }
+  .items li:last-child { border-bottom: 0; }
+  .items .name { font-weight: 700; }
+  .items .score { font-weight: 800; font-variant-numeric: tabular-nums; }
+  .bar { grid-column: 1 / -1; height: 6px; background: var(--bar); border-radius: 3px; overflow: hidden; }
+  .bar span { display: block; height: 100%; border-radius: 3px; }
+  .where { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; font-size: 13px; }
+  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--muted); }
+  .chip b { color: var(--fg); }
+  .foot { margin: 0; text-align: center; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>메이플 오늘의 운세</h1>
+    <p class="sub">캐릭터와 오늘 날짜로 정해지는 운세예요. 같은 날엔 언제 봐도 같은 결과가 나와요.</p>
+  </header>
+
+  <section class="panel" id="keyPanel">
+    <div class="row">
+      <input id="apiKey" type="password" placeholder="넥슨 OpenAPI 키" autocomplete="off">
+      <button id="keySave">불러오기</button>
+    </div>
+    <p class="hint">키는 <a href="https://openapi.nexon.com/my-application/" target="_blank" rel="noopener">넥슨 OpenAPI</a>에서 발급받을 수 있어요. 이 브라우저에만 저장되고 넥슨 API 외에는 어디에도 보내지 않아요.</p>
+  </section>
+
+  <section class="panel" id="charPanel" hidden>
+    <div class="keyline">
+      <span id="charCount"></span>
+      <button class="ghost" id="keyReset">키 변경</button>
+    </div>
+    <div class="row">
+      <select id="charSelect"></select>
+      <button id="runBtn">운세 보기</button>
+    </div>
+  </section>
+
+  <p class="error" id="error" hidden></p>
+
+  <section id="result"></section>
+
+  <p class="foot">재미로만 봐 주세요. 실제 게임 확률과는 무관해요.</p>
+</main>
+
+<script>
+const API = "https://open.api.nexon.com/maplestory/v1";
+const KEY_STORAGE = "maple-fortune:apiKey";
+const LAST_CHAR_STORAGE = "maple-fortune:lastOcid";
+
+// 확인된 월드별 채널 수 (20세 이상 채널 포함)
+const WORLD_CHANNELS = {
+  "스카니아": 60, "루나": 60,
+  "베라": 40, "크로아": 40, "엘리시움": 40, "오로라": 40, "핼리오스": 40,
+  "제니스": 16, "이노시스": 16, "유니온": 16, "아케인": 16
+};
+
+// 강화·뽑기를 할 마을 후보 (입장 가능 레벨)
+const TOWNS = [
+  ["헤네시스", 1], ["엘리니아", 1], ["페리온", 1], ["커닝시티", 1], ["리스항구", 1],
+  ["엘나스", 50], ["오르비스", 50], ["루디브리엄", 60], ["아리안트", 60], ["무릉", 70],
+  ["백초마을", 70], ["아쿠아리움", 70], ["마가티아", 70], ["리프레", 100],
+  ["소멸의 여로", 200], ["츄츄 아일랜드", 210], ["레헬른", 220], ["아르카나", 225],
+  ["모라스", 230], ["에스페라", 235], ["셀라스", 245], ["문브릿지", 250],
+  ["세르니움", 260], ["아르크스", 265], ["오디움", 270], ["도원경", 275],
+  ["아르테리아", 280], ["카르시온", 285], ["탈라하트", 290]
+];
+
+// boss는 맵 추천 제외
+const ITEMS = [
+  { key: "starforce", name: "스타포스운", map: true },
+  { key: "potential", name: "잠재운", map: true },
+  { key: "flame", name: "추옵운", map: true },
+  { key: "boss", name: "보스득템운", map: false },
+  { key: "gacha", name: "가챠운", map: true }
+];
+
+const STEMS = "갑을병정무기경신임계";
+const BRANCHES = "자축인묘진사오미신유술해";
+const ELEMENTS = ["목", "화", "토", "금", "수"];
+
+const $ = (id) => document.getElementById(id);
+let characters = [];
+
+function storageGet(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function storageSet(key, value) {
+  try { value === null ? localStorage.removeItem(key) : localStorage.setItem(key, value); } catch {}
+}
+
+function showError(msg) {
+  $("error").textContent = msg;
+  $("error").hidden = !msg;
+}
+
+async function nexonGet(path, key) {
+  const res = await fetch(API + path, { headers: { "x-nxopen-api-key": key } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const name = data?.error?.name;
+    if (name === "OPENAPI00005") throw new Error("API 키가 올바르지 않아요. 키를 다시 확인해 주세요.");
+    if (name === "OPENAPI00007") throw new Error("요청이 너무 많아요. 잠시 후 다시 시도해 주세요.");
+    throw new Error(data?.error?.message || `넥슨 API 오류 (HTTP ${res.status})`);
+  }
+  return data;
+}
+
+// 한국 시간 기준 오늘 날짜 (YYYY-MM-DD)
+function kstToday() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(new Date());
+}
+
+// FNV-1a 해시 → 0 이상 1 미만
+function hashUnit(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) / 4294967296;
+}
+
+// 2000-01-07이 갑자일. 날짜의 육십갑자 인덱스(0~59)
+function dayPillarIndex(ymd) {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const days = Math.round((Date.UTC(y, m - 1, d) - Date.UTC(2000, 0, 7)) / 86400000);
+  return ((days % 60) + 60) % 60;
+}
+
+function pillarName(idx) {
+  return STEMS[idx % 10] + BRANCHES[idx % 12];
+}
+
+// 생성일 일주와 오늘 일진의 궁합 보정치 (-14 ~ +14)
+function dayAffinity(birthIdx, todayIdx) {
+  const b = Math.floor((birthIdx % 10) / 2);
+  const t = Math.floor((todayIdx % 10) / 2);
+  let score = 0;
+  let note;
+  if (t === b) { score += 4; note = "같은 기운"; }
+  else if ((t + 1) % 5 === b) { score += 8; note = "오늘이 나를 도와줌"; }
+  else if ((b + 2) % 5 === t) { score += 2; note = "내가 기운을 다스림"; }
+  else if ((b + 1) % 5 === t) { score -= 2; note = "내 기운을 씀"; }
+  else { score -= 8; note = "오늘이 나를 누름"; }
+
+  const bb = birthIdx % 12;
+  const tb = todayIdx % 12;
+  if ((bb + tb) % 12 === 1) { score += 6; note += " · 육합"; }
+  else if (Math.abs(bb - tb) === 6) { score -= 6; note += " · 충"; }
+
+  return { score, note, birthElement: ELEMENTS[b], todayElement: ELEMENTS[t] };
+}
+
+function grade(score) {
+  if (score >= 85) return { label: "매우 좋음", color: "var(--good)" };
+  if (score >= 70) return { label: "좋음", color: "var(--good)" };
+  if (score >= 50) return { label: "보통", color: "var(--mid)" };
+  if (score >= 35) return { label: "주의", color: "var(--bad)" };
+  return { label: "나쁨", color: "var(--bad)" };
+}
+
+function computeFortune(basic, ocid, today) {
+  const birthYmd = basic.character_date_create.slice(0, 10);
+  const birthIdx = dayPillarIndex(birthYmd);
+  const todayIdx = dayPillarIndex(today);
+  const affinity = dayAffinity(birthIdx, todayIdx);
+  const maxChannel = WORLD_CHANNELS[basic.world_name] || null;
+  const towns = TOWNS.filter(([, minLevel]) => basic.character_level >= minLevel);
+
+  const items = ITEMS.map((item) => {
+    const seed = `${ocid}|${today}|${item.key}`;
+    const base = 30 + Math.floor(hashUnit(seed + "|score") * 61);
+    const score = Math.max(5, Math.min(100, base + affinity.score));
+    const channel = maxChannel ? Math.floor(hashUnit(seed + "|channel") * maxChannel) + 1 : null;
+    const town = item.map ? towns[Math.floor(hashUnit(seed + "|town") * towns.length)][0] : null;
+    return { ...item, score, channel, town };
+  });
+
+  const total = Math.round(items.reduce((sum, item) => sum + item.score, 0) / items.length);
+  return { birthYmd, birthIdx, todayIdx, affinity, items, total };
+}
+
+function el(tag, attrs = {}, children = []) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "text") node.textContent = v;
+    else if (k === "style") node.style.cssText = v;
+    else node.setAttribute(k, v);
+  }
+  for (const child of children) node.append(child);
+  return node;
+}
+
+function chip(label, value) {
+  return el("span", { class: "chip" }, [label + " ", el("b", { text: value })]);
+}
+
+function renderResult(basic, fortune, today) {
+  const totalGrade = grade(fortune.total);
+  const head = el("div", { class: "head" }, [
+    el("img", { src: basic.character_image, alt: basic.character_name }),
+    el("div", { class: "who" }, [
+      el("b", { text: basic.character_name }),
+      el("div", { text: `${basic.world_name} · ${basic.character_class} · Lv.${basic.character_level}` }),
+      el("div", { text: `생성일 ${fortune.birthYmd}` })
+    ]),
+    el("div", { class: "total" }, [
+      el("div", { class: "num", text: String(fortune.total) }),
+      el("div", { class: "grade", text: totalGrade.label, style: `color:${totalGrade.color}` })
+    ])
+  ]);
+
+  const a = fortune.affinity;
+  const day = el("div", {
+    class: "day",
+    text: `${today} 일진 ${pillarName(fortune.todayIdx)}(${a.todayElement}) × 생성일 일주 ${pillarName(fortune.birthIdx)}(${a.birthElement}) — ${a.note} (${a.score >= 0 ? "+" : ""}${a.score})`
+  });
+
+  const list = el("ul", { class: "items" });
+  for (const item of fortune.items) {
+    const g = grade(item.score);
+    const where = el("div", { class: "where" }, [
+      chip("채널", item.channel ? String(item.channel) : "채널 수 미확인")
+    ]);
+    if (item.town) where.append(chip("맵", item.town));
+    list.append(el("li", {}, [
+      el("span", { class: "name", text: item.name }),
+      el("span", { class: "score", text: `${item.score}점 · ${g.label}`, style: `color:${g.color}` }),
+      el("div", { class: "bar" }, [el("span", { style: `width:${item.score}%;background:${g.color}` })]),
+      where
+    ]));
+  }
+
+  $("result").replaceChildren(el("div", { class: "card" }, [head, day, list]));
+}
+
+function renderCharacterList() {
+  const select = $("charSelect");
+  select.replaceChildren();
+  const byWorld = new Map();
+  for (const c of characters) {
+    if (!byWorld.has(c.world_name)) byWorld.set(c.world_name, []);
+    byWorld.get(c.world_name).push(c);
+  }
+  for (const [world, list] of byWorld) {
+    const group = el("optgroup", { label: world });
+    list.sort((x, y) => y.character_level - x.character_level);
+    for (const c of list) {
+      group.append(el("option", { value: c.ocid, text: `${c.character_name} · Lv.${c.character_level} ${c.character_class}` }));
+    }
+    select.append(group);
+  }
+  const last = storageGet(LAST_CHAR_STORAGE);
+  if (last && characters.some((c) => c.ocid === last)) select.value = last;
+  $("charCount").textContent = `캐릭터 ${characters.length}개`;
+}
+
+async function loadCharacters(key) {
+  showError("");
+  $("keySave").disabled = true;
+  $("keySave").textContent = "불러오는 중…";
+  try {
+    const data = await nexonGet("/character/list", key);
+    characters = (data.account_list || []).flatMap((acc) => acc.character_list || []);
+    if (!characters.length) throw new Error("이 계정에 캐릭터가 없어요.");
+    storageSet(KEY_STORAGE, key);
+    renderCharacterList();
+    $("keyPanel").hidden = true;
+    $("charPanel").hidden = false;
+  } catch (e) {
+    showError(e.message);
+    $("keyPanel").hidden = false;
+    $("charPanel").hidden = true;
+  } finally {
+    $("keySave").disabled = false;
+    $("keySave").textContent = "불러오기";
+  }
+}
+
+async function runFortune() {
+  const key = storageGet(KEY_STORAGE) || $("apiKey").value.trim();
+  const ocid = $("charSelect").value;
+  if (!ocid) return;
+  showError("");
+  $("runBtn").disabled = true;
+  $("runBtn").textContent = "보는 중…";
+  try {
+    const basic = await nexonGet(`/character/basic?ocid=${encodeURIComponent(ocid)}`, key);
+    const today = kstToday();
+    storageSet(LAST_CHAR_STORAGE, ocid);
+    renderResult(basic, computeFortune(basic, ocid, today), today);
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    $("runBtn").disabled = false;
+    $("runBtn").textContent = "운세 보기";
+  }
+}
+
+$("keySave").addEventListener("click", () => {
+  const key = $("apiKey").value.trim();
+  if (!key) return showError("API 키를 입력해 주세요.");
+  loadCharacters(key);
+});
+$("apiKey").addEventListener("keydown", (e) => { if (e.key === "Enter") $("keySave").click(); });
+$("runBtn").addEventListener("click", runFortune);
+$("keyReset").addEventListener("click", () => {
+  storageSet(KEY_STORAGE, null);
+  characters = [];
+  $("apiKey").value = "";
+  $("result").replaceChildren();
+  $("charPanel").hidden = true;
+  $("keyPanel").hidden = false;
+  $("apiKey").focus();
+});
+
+const savedKey = storageGet(KEY_STORAGE);
+if (savedKey) loadCharacters(savedKey);
+</script>
+</body>
+</html>
