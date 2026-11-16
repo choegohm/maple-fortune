@@ -33,6 +33,7 @@
     }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body {
     margin: 0;
     background: var(--bg);
@@ -59,7 +60,23 @@
 
   .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
   .head { display: flex; gap: 14px; align-items: center; padding: 16px; border-bottom: 1px solid var(--line); }
-  .head img { width: 72px; height: 72px; object-fit: contain; image-rendering: pixelated; flex: none; }
+  /* 넥슨 캐릭터 이미지는 여백이 커서 확대해 잘라 보여준다 */
+  .avatar { width: 120px; height: 120px; flex: none; overflow: hidden; }
+  .avatar img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; transform: scale(2); }
+  .avatar.small { width: 88px; height: 88px; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+  .fcard { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px; cursor: pointer; display: flex; flex-direction: column; gap: 8px; }
+  .fcard:hover, .fcard.active { border-color: var(--accent); }
+  .fcard .top { display: flex; gap: 10px; align-items: center; }
+  .fcard .who b { font-size: 15px; }
+  .fcard .total .num { font-size: 28px; }
+  .fcard .state { color: var(--muted); font-size: 13px; }
+  .mini { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  .mini li { display: grid; grid-template-columns: 72px 1fr 28px; gap: 8px; align-items: center; }
+  .mini .bar { height: 5px; grid-column: auto; }
+  .mini b { text-align: right; font-variant-numeric: tabular-nums; }
+  #detail:empty { display: none; }
   .who { flex: 1; min-width: 0; }
   .who b { font-size: 17px; }
   .who div { color: var(--muted); font-size: 13px; }
@@ -102,15 +119,13 @@
       <span id="charCount"></span>
       <button class="ghost" id="keyReset">로그아웃</button>
     </div>
-    <div class="row">
-      <select id="charSelect"></select>
-      <button id="runBtn">운세 보기</button>
-    </div>
+    <select id="worldSelect" aria-label="월드 선택"></select>
   </section>
 
   <p class="error" id="error" hidden></p>
 
-  <section id="result"></section>
+  <section id="detail"></section>
+  <section id="cards" class="cards"></section>
 
   <p class="foot">재미로만 봐 주세요. 실제 게임 확률과는 무관해요.<br>Data based on NEXON Open API</p>
 </main>
@@ -121,7 +136,9 @@ const API = "https://open.api.nexon.com/maplestory/v1";
 const WORKER_URL = "https://maple-fortune.choegohm.workers.dev";
 const KEY_STORAGE = "maple-fortune:apiKey";
 const SESSION_STORAGE = "maple-fortune:session";
-const LAST_CHAR_STORAGE = "maple-fortune:lastCharacter";
+const LAST_WORLD_STORAGE = "maple-fortune:lastWorld";
+// 개발 단계 API 키 한도(초당 5건) 아래로 호출 간격을 둔다
+const MIN_CALL_GAP_MS = 250;
 
 const LOGIN_ERRORS = {
   cancelled: "넥슨 로그인이 취소됐어요.",
@@ -162,6 +179,9 @@ const ELEMENTS = ["목", "화", "토", "금", "수"];
 
 const $ = (id) => document.getElementById(id);
 let characters = [];
+const basicCache = new Map(); // ref → character/basic 응답
+let nextCallAt = 0;
+let worldRenderId = 0;
 
 function storageGet(key) {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -317,10 +337,14 @@ function chip(label, value) {
   return el("span", { class: "chip" }, [label + " ", el("b", { text: value })]);
 }
 
-function renderResult(basic, fortune, today) {
+function avatar(basic, size = "") {
+  return el("div", { class: `avatar ${size}`.trim() }, [el("img", { src: basic.character_image, alt: basic.character_name })]);
+}
+
+function renderDetail(basic, fortune, today) {
   const totalGrade = grade(fortune.total);
   const head = el("div", { class: "head" }, [
-    el("img", { src: basic.character_image, alt: basic.character_name }),
+    avatar(basic),
     el("div", { class: "who" }, [
       el("b", { text: basic.character_name }),
       el("div", { text: `${basic.world_name} · ${basic.character_class} · Lv.${basic.character_level}` }),
@@ -353,28 +377,106 @@ function renderResult(basic, fortune, today) {
     ]));
   }
 
-  $("result").replaceChildren(el("div", { class: "card" }, [head, day, list]));
+  $("detail").replaceChildren(el("div", { class: "card" }, [head, day, list]));
 }
 
-function renderCharacterList() {
-  const select = $("charSelect");
-  select.replaceChildren();
-  const byWorld = new Map();
-  for (const c of characters) {
-    if (!byWorld.has(c.world_name)) byWorld.set(c.world_name, []);
-    byWorld.get(c.world_name).push(c);
+// 캐릭터 한 명의 요약 카드. 정보가 오기 전에는 이름만 보여준다
+function renderSummaryCard(card, character, basic, fortune) {
+  if (!basic) {
+    card.replaceChildren(
+      el("div", { class: "who" }, [
+        el("b", { text: character.character_name }),
+        el("div", { text: `Lv.${character.character_level} ${character.character_class}` })
+      ]),
+      el("div", { class: "state", text: "불러오는 중…" })
+    );
+    return;
   }
-  for (const [world, list] of byWorld) {
-    const group = el("optgroup", { label: world });
-    list.sort((x, y) => y.character_level - x.character_level);
-    for (const c of list) {
-      group.append(el("option", { value: c.ref, text: `${c.character_name} · Lv.${c.character_level} ${c.character_class}` }));
-    }
-    select.append(group);
+  const totalGrade = grade(fortune.total);
+  const mini = el("ul", { class: "mini" });
+  for (const item of fortune.items) {
+    const g = grade(item.score);
+    mini.append(el("li", {}, [
+      el("span", { text: item.name }),
+      el("div", { class: "bar" }, [el("span", { style: `width:${item.score}%;background:${g.color}` })]),
+      el("b", { text: String(item.score), style: `color:${g.color}` })
+    ]));
   }
-  const last = storageGet(LAST_CHAR_STORAGE);
-  if (last && characters.some((c) => c.ref === last)) select.value = last;
+  card.replaceChildren(
+    el("div", { class: "top" }, [
+      avatar(basic, "small"),
+      el("div", { class: "who" }, [
+        el("b", { text: basic.character_name }),
+        el("div", { text: `Lv.${basic.character_level} ${basic.character_class}` })
+      ]),
+      el("div", { class: "total" }, [
+        el("div", { class: "num", text: String(fortune.total) }),
+        el("div", { class: "grade", text: totalGrade.label, style: `color:${totalGrade.color}` })
+      ])
+    ]),
+    mini
+  );
+}
+
+function renderWorldList() {
+  const select = $("worldSelect");
+  const counts = new Map();
+  for (const c of characters) counts.set(c.world_name, (counts.get(c.world_name) || 0) + 1);
+  select.replaceChildren(...[...counts].map(([world, n]) => el("option", { value: world, text: `${world} (${n})` })));
+  const last = storageGet(LAST_WORLD_STORAGE);
+  if (last && counts.has(last)) select.value = last;
   $("charCount").textContent = `캐릭터 ${characters.length}개`;
+}
+
+async function fetchBasic(character) {
+  if (basicCache.has(character.ref)) return basicCache.get(character.ref);
+  const wait = nextCallAt - Date.now();
+  nextCallAt = Math.max(Date.now(), nextCallAt) + MIN_CALL_GAP_MS;
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  const basic = await currentSource().basic(character);
+  basicCache.set(character.ref, basic);
+  return basic;
+}
+
+// 고른 월드의 캐릭터를 레벨 순으로 카드로 깔고, 한 명씩 운세를 채운다
+async function showWorld() {
+  const renderId = ++worldRenderId;
+  const world = $("worldSelect").value;
+  storageSet(LAST_WORLD_STORAGE, world);
+  showError("");
+  $("detail").replaceChildren();
+  const today = kstToday();
+  const list = characters
+    .filter((c) => c.world_name === world)
+    .sort((x, y) => y.character_level - x.character_level);
+
+  const cards = list.map((character) => {
+    const card = el("div", { class: "fcard", role: "button", tabindex: "0" });
+    renderSummaryCard(card, character);
+    return card;
+  });
+  $("cards").replaceChildren(...cards);
+
+  for (let i = 0; i < list.length; i++) {
+    if (renderId !== worldRenderId) return;
+    const character = list[i];
+    const card = cards[i];
+    try {
+      const basic = await fetchBasic(character);
+      if (renderId !== worldRenderId) return;
+      const fortune = computeFortune(basic, character.ref, today);
+      renderSummaryCard(card, character, basic, fortune);
+      const open = () => {
+        for (const c of cards) c.classList.toggle("active", c === card);
+        renderDetail(basic, fortune, today);
+        $("detail").scrollIntoView({ behavior: "smooth", block: "start" });
+      };
+      card.addEventListener("click", open);
+      card.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    } catch (e) {
+      card.querySelector(".state").textContent = e.message;
+    }
+  }
 }
 
 async function loadCharacters() {
@@ -385,9 +487,10 @@ async function loadCharacters() {
     const data = await currentSource().list();
     characters = (data.account_list || []).flatMap((acc) => acc.character_list || []);
     if (!characters.length) throw new Error("이 계정에 캐릭터가 없어요.");
-    renderCharacterList();
+    renderWorldList();
     $("keyPanel").hidden = true;
     $("charPanel").hidden = false;
+    showWorld();
   } catch (e) {
     showError(e.message);
     storageSet(KEY_STORAGE, null);
@@ -396,25 +499,6 @@ async function loadCharacters() {
   } finally {
     $("keySave").disabled = false;
     $("keySave").textContent = "불러오기";
-  }
-}
-
-async function runFortune() {
-  const character = characters.find((c) => c.ref === $("charSelect").value);
-  if (!character) return;
-  showError("");
-  $("runBtn").disabled = true;
-  $("runBtn").textContent = "보는 중…";
-  try {
-    const basic = await currentSource().basic(character);
-    const today = kstToday();
-    storageSet(LAST_CHAR_STORAGE, character.ref);
-    renderResult(basic, computeFortune(basic, character.ref, today), today);
-  } catch (e) {
-    showError(e.message);
-  } finally {
-    $("runBtn").disabled = false;
-    $("runBtn").textContent = "운세 보기";
   }
 }
 
@@ -428,7 +512,7 @@ $("keySave").addEventListener("click", () => {
   loadCharacters();
 });
 $("apiKey").addEventListener("keydown", (e) => { if (e.key === "Enter") $("keySave").click(); });
-$("runBtn").addEventListener("click", runFortune);
+$("worldSelect").addEventListener("change", showWorld);
 $("keyReset").addEventListener("click", () => {
   const session = storageGet(SESSION_STORAGE);
   if (session) {
@@ -437,8 +521,11 @@ $("keyReset").addEventListener("click", () => {
   storageSet(SESSION_STORAGE, null);
   storageSet(KEY_STORAGE, null);
   characters = [];
+  basicCache.clear();
+  worldRenderId++;
   $("apiKey").value = "";
-  $("result").replaceChildren();
+  $("detail").replaceChildren();
+  $("cards").replaceChildren();
   $("charPanel").hidden = true;
   $("keyPanel").hidden = false;
   $("apiKey").focus();
