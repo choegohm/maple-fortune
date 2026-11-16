@@ -200,7 +200,7 @@ async function nexonGet(path, key) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const name = data?.error?.name;
-    if (name === "OPENAPI00005") throw new Error("API 키가 올바르지 않아요. 키를 다시 확인해 주세요.");
+    if (name === "OPENAPI00005") throw Object.assign(new Error("API 키가 올바르지 않아요. 키를 다시 확인해 주세요."), { invalidKey: true });
     if (name === "OPENAPI00007") throw new Error("요청이 너무 많아요. 잠시 후 다시 시도해 주세요.");
     throw new Error(data?.error?.message || `넥슨 API 오류 (HTTP ${res.status})`);
   }
@@ -493,7 +493,8 @@ async function loadCharacters() {
     showWorld();
   } catch (e) {
     showError(e.message);
-    storageSet(KEY_STORAGE, null);
+    // 키가 틀렸을 때만 지운다. 네트워크·호출량·점검 오류로는 로그인을 풀지 않는다
+    if (e.invalidKey) storageSet(KEY_STORAGE, null);
     $("keyPanel").hidden = false;
     $("charPanel").hidden = true;
   } finally {
@@ -506,7 +507,8 @@ $("nexonLogin").addEventListener("click", () => {
   location.href = WORKER_URL + "/login";
 });
 $("keySave").addEventListener("click", () => {
-  const key = $("apiKey").value.trim();
+  // 입력이 비어 있으면 저장된 키로 다시 시도한다
+  const key = $("apiKey").value.trim() || storageGet(KEY_STORAGE);
   if (!key) return showError("API 키를 입력해 주세요.");
   storageSet(KEY_STORAGE, key);
   loadCharacters();
